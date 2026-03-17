@@ -34,11 +34,15 @@ This document describes how to propose changes, report bugs, and submit pull req
 
 ## Windows Setup
 
-Windows does not include `make` by default. You need to install it first.
+Windows does not include `make` by default. We use `make` as a task runner for commands like linting, type-checking, and testing, so you’ll need to install it first.
 
 **Step 1 — Open PowerShell as Administrator** (search "PowerShell" in Start Menu → right-click → "Run as administrator")
 
+### Option 1 — Chocolatey
+
 **Step 2 — Install Chocolatey** (paste this and press Enter):
+
+⚠️ This command executes a remote script from Chocolatey. Review it before running.
 
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
@@ -50,7 +54,29 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManage
 choco install make
 ```
 
-**Step 4 — Restart your terminal**, then continue with the standard setup steps above (`make lint`, `make typecheck`, `make test-cov` will all work).
+### Option 2 — winget
+
+Install `make` with `winget`:
+
+```powershell
+winget install GnuWin32.Make
+```
+
+**Step 4 — Restart your terminal** to ensure `make` is available in your `PATH`.
+
+**Step 5 — Verify the installation:**
+
+```bash
+make --version
+```
+
+You can now run the standard checks:
+
+```bash
+make lint
+make typecheck
+make test-cov
+```
 
 ### Pull request guidelines
 
