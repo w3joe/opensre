@@ -33,9 +33,9 @@ def test_run_wizard_advanced_remote_falls_back_to_local(monkeypatch, tmp_path, c
 
     saved: dict[str, object] = {}
 
-    monkeypatch.setattr(flow.questionary, "select", _mock_select)
+    monkeypatch.setattr(flow, "select_prompt", _mock_select)
     monkeypatch.setattr(flow.questionary, "confirm", _mock_confirm)
-    monkeypatch.setattr(flow.questionary, "checkbox", _mock_checkbox)
+    monkeypatch.setattr(flow, "checkbox_prompt", _mock_checkbox)
     monkeypatch.setattr(flow.questionary, "password", _mock_password)
     monkeypatch.setattr(flow, "get_store_path", lambda: tmp_path / "opensre.json")
     monkeypatch.setattr(flow, "probe_local_target", lambda _path: ProbeResult("local", True, "ok"))
@@ -67,9 +67,9 @@ def test_run_wizard_advanced_remote_falls_back_to_local(monkeypatch, tmp_path, c
     assert saved["api_key"] == "secret-key"
 
     output = capsys.readouterr().out
-    assert "Provider sample: OpenSRE ready" in output
-    assert "Demo action response" in output
-    assert "Saved configuration" in output
+    assert "Sample: OpenSRE ready" in output
+    assert "Demo" in output
+    assert "Saved local configuration." in output
 
 
 def test_run_wizard_retries_invalid_api_key(monkeypatch, tmp_path, capsys) -> None:
@@ -97,8 +97,8 @@ def test_run_wizard_retries_invalid_api_key(monkeypatch, tmp_path, capsys) -> No
         m.ask.return_value = "secret-key"
         return m
 
-    monkeypatch.setattr(flow.questionary, "select", _mock_select)
-    monkeypatch.setattr(flow.questionary, "checkbox", _mock_checkbox)
+    monkeypatch.setattr(flow, "select_prompt", _mock_select)
+    monkeypatch.setattr(flow, "checkbox_prompt", _mock_checkbox)
     monkeypatch.setattr(flow.questionary, "password", _mock_password)
     monkeypatch.setattr(flow, "get_store_path", lambda: tmp_path / "opensre.json")
     monkeypatch.setattr(flow, "probe_local_target", lambda _path: ProbeResult("local", True, "ok"))
@@ -120,7 +120,7 @@ def test_run_wizard_retries_invalid_api_key(monkeypatch, tmp_path, capsys) -> No
     assert exit_code == 0
     output = capsys.readouterr().out
     assert "Validation failed: bad key" in output
-    assert "Paste the API key again to retry" in output
+    assert "Press Enter to reuse the saved key, or paste a new one." in output
     assert "validated" in output
 
 
@@ -156,8 +156,8 @@ def test_run_wizard_configures_optional_integrations(monkeypatch, tmp_path, caps
         m.ask.return_value = next(text_responses)
         return m
 
-    monkeypatch.setattr(flow.questionary, "select", _mock_select)
-    monkeypatch.setattr(flow.questionary, "checkbox", _mock_checkbox)
+    monkeypatch.setattr(flow, "select_prompt", _mock_select)
+    monkeypatch.setattr(flow, "checkbox_prompt", _mock_checkbox)
     monkeypatch.setattr(flow.questionary, "password", _mock_password)
     monkeypatch.setattr(flow.questionary, "text", _mock_text)
     monkeypatch.setattr(flow, "get_store_path", lambda: tmp_path / "opensre.json")
@@ -266,8 +266,8 @@ def test_run_wizard_configures_github_mcp_and_sentry(monkeypatch, tmp_path, caps
         m.ask.return_value = next(text_responses)
         return m
 
-    monkeypatch.setattr(flow.questionary, "select", _mock_select)
-    monkeypatch.setattr(flow.questionary, "checkbox", _mock_checkbox)
+    monkeypatch.setattr(flow, "select_prompt", _mock_select)
+    monkeypatch.setattr(flow, "checkbox_prompt", _mock_checkbox)
     monkeypatch.setattr(flow.questionary, "password", _mock_password)
     monkeypatch.setattr(flow.questionary, "text", _mock_text)
     monkeypatch.setattr(flow, "get_store_path", lambda: tmp_path / "opensre.json")
@@ -359,3 +359,73 @@ def test_run_wizard_configures_github_mcp_and_sentry(monkeypatch, tmp_path, caps
     output = capsys.readouterr().out
     assert "GitHub MCP" in output
     assert "Sentry" in output
+
+
+def test_run_wizard_reuses_saved_defaults_when_user_confirms_defaults(monkeypatch, tmp_path) -> None:
+    saved: dict[str, object] = {}
+
+    def _mock_select(*_args, choices=None, default=None, **_kwargs):
+        m = MagicMock()
+        selected_value = default
+        if choices is not None:
+            for choice in choices:
+                if getattr(choice, "title", None) == default:
+                    selected_value = choice.value
+                    break
+        m.ask.return_value = selected_value
+        return m
+
+    def _mock_checkbox(*_args, **_kwargs):
+        m = MagicMock()
+        m.ask.return_value = []
+        return m
+
+    def _mock_password(*_args, default="", **_kwargs):
+        m = MagicMock()
+        m.ask.return_value = default
+        return m
+
+    monkeypatch.setattr(flow, "select_prompt", _mock_select)
+    monkeypatch.setattr(flow, "checkbox_prompt", _mock_checkbox)
+    monkeypatch.setattr(flow.questionary, "password", _mock_password)
+    monkeypatch.setattr(flow, "get_store_path", lambda: tmp_path / "opensre.json")
+    monkeypatch.setattr(
+        flow,
+        "load_local_config",
+        lambda _path: {
+            "wizard": {"mode": "quickstart"},
+            "targets": {
+                "local": {
+                    "provider": "openai",
+                    "model": "gpt-5-mini",
+                    "api_key": "saved-secret",
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(flow, "probe_local_target", lambda _path: ProbeResult("local", True, "ok"))
+    monkeypatch.setattr(
+        flow,
+        "validate_provider_credentials",
+        lambda **_kwargs: ValidationResult(ok=True, detail="validated", sample_response="ready"),
+    )
+    monkeypatch.setattr(
+        flow,
+        "build_demo_action_response",
+        lambda: {"success": True, "topics": [], "guidance": []},
+    )
+
+    def _save_local_config(**kwargs):
+        saved.update(kwargs)
+        return tmp_path / "opensre.json"
+
+    monkeypatch.setattr(flow, "save_local_config", _save_local_config)
+    monkeypatch.setattr(flow, "sync_provider_env", lambda **_kwargs: tmp_path / ".env")
+
+    exit_code = flow.run_wizard()
+
+    assert exit_code == 0
+    assert saved["wizard_mode"] == "quickstart"
+    assert saved["provider"] == "openai"
+    assert saved["model"] == "gpt-5-mini"
+    assert saved["api_key"] == "saved-secret"

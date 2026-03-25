@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 _VERSION = 1
+_EMPTY_CONFIG = {"version": _VERSION, "wizard": {}, "targets": {}, "probes": {}}
 
 
 def get_store_path() -> Path:
@@ -18,16 +19,21 @@ def get_store_path() -> Path:
 def _load_raw(path: Path | None = None) -> dict[str, Any]:
     store_path = path or get_store_path()
     if not store_path.exists():
-        return {"version": _VERSION, "wizard": {}, "targets": {}, "probes": {}}
+        return dict(_EMPTY_CONFIG)
 
     try:
         data = json.loads(store_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
-        return {"version": _VERSION, "wizard": {}, "targets": {}, "probes": {}}
+        return dict(_EMPTY_CONFIG)
 
     if not isinstance(data, dict):
-        return {"version": _VERSION, "wizard": {}, "targets": {}, "probes": {}}
+        return dict(_EMPTY_CONFIG)
     return data
+
+
+def load_local_config(path: Path | None = None) -> dict[str, Any]:
+    """Return the persisted wizard payload for the current user."""
+    return _load_raw(path)
 
 
 def save_local_config(

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import questionary
+from questionary import Choice as QuestionaryChoice
 from questionary import Style
 from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
 
 from app.cli.wizard.config import PROVIDER_BY_VALUE, SUPPORTED_PROVIDERS, ProviderOption
 from app.cli.wizard.env_sync import sync_env_values, sync_provider_env
@@ -23,11 +23,13 @@ from app.cli.wizard.integration_health import (
     validate_slack_webhook,
 )
 from app.cli.wizard.probes import ProbeResult, probe_local_target, probe_remote_target
-from app.cli.wizard.store import get_store_path, save_local_config
+from app.cli.wizard.prompts import checkbox as checkbox_prompt
+from app.cli.wizard.prompts import select as select_prompt
+from app.cli.wizard.store import get_store_path, load_local_config, save_local_config
 from app.cli.wizard.validation import build_demo_action_response, validate_provider_credentials
 from app.integrations.github_mcp import DEFAULT_GITHUB_MCP_MODE, DEFAULT_GITHUB_MCP_URL
 from app.integrations.sentry import DEFAULT_SENTRY_URL, get_sentry_auth_recommendations
-from app.integrations.store import upsert_integration
+from app.integrations.store import get_integration, upsert_integration
 
 _console = Console()
 
@@ -54,8 +56,42 @@ class Choice:
     group: str | None = None
 
 
+def _as_mapping(value: object) -> Mapping[str, object]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _string_value(value: object, fallback: str = "") -> str:
+    return value if isinstance(value, str) else fallback
+
+
+def _joined_values(value: object, *, separator: str, fallback: str) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return separator.join(value)
+    return fallback
+
+
+def _local_defaults() -> dict[str, str]:
+    stored = load_local_config(get_store_path())
+    wizard = _as_mapping(stored.get("wizard"))
+    targets = _as_mapping(stored.get("targets"))
+    local = _as_mapping(targets.get("local"))
+    return {
+        "wizard_mode": _string_value(wizard.get("mode"), "quickstart"),
+        "provider": _string_value(local.get("provider"), SUPPORTED_PROVIDERS[0].value),
+        "model": _string_value(local.get("model")),
+        "api_key": _string_value(local.get("api_key")),
+    }
+
+
+def _integration_defaults(service: str) -> tuple[Mapping[str, object], Mapping[str, object]]:
+    entry = _as_mapping(get_integration(service))
+    return entry, _as_mapping(entry.get("credentials"))
+
+
 def _step(title: str) -> None:
-    _console.rule(f"[bold cyan]{title}[/]")
+    _console.print(f"\n[bold]{title}[/]")
 
 
 def _choose(prompt: str, choices: list[Choice], *, default: str | None = None) -> str:
@@ -64,16 +100,16 @@ def _choose(prompt: str, choices: list[Choice], *, default: str | None = None) -
     for choice in choices:
         suffix = f" ({choice.group})" if choice.group else ""
         label = f"{choice.label}{suffix}"
-        q_choices.append(questionary.Choice(title=label, value=choice.value))
+        q_choices.append(QuestionaryChoice(title=label, value=choice.value))
         if choice.value == default:
             default_label = label
 
-    result = questionary.select(
+    result = select_prompt(
         prompt,
         choices=q_choices,
         default=default_label,
         style=_STYLE,
-        instruction="(use arrow keys)",
+        instruction="(Tab or arrows, Enter to confirm)",
     ).ask()
 
     if result is None:
@@ -82,15 +118,13 @@ def _choose(prompt: str, choices: list[Choice], *, default: str | None = None) -
 
 
 def _choose_many(prompt: str, choices: list[Choice]) -> list[str]:
-    q_choices = [
-        questionary.Choice(title=choice.label, value=choice.value) for choice in choices
-    ]
+    q_choices = [QuestionaryChoice(title=choice.label, value=choice.value) for choice in choices]
 
-    result = questionary.checkbox(
+    result = checkbox_prompt(
         prompt,
         choices=q_choices,
         style=_STYLE,
-        instruction="(space to toggle, enter to confirm)",
+        instruction="(Space to toggle, Tab or arrows to move, Enter to confirm)",
     ).ask()
 
     if result is None:
@@ -113,10 +147,21 @@ def _prompt_value(
     allow_empty: bool = False,
 ) -> str:
     while True:
+        instruction = "(press Enter to keep saved value)" if default else None
         if secret:
-            result = questionary.password(f"  {label}", style=_STYLE).ask()
+            result = questionary.password(
+                label,
+                default=default,
+                style=_STYLE,
+                instruction=instruction,
+            ).ask()
         else:
-            result = questionary.text(f"  {label}", default=default, style=_STYLE).ask()
+            result = questionary.text(
+                label,
+                default=default,
+                style=_STYLE,
+                instruction=instruction,
+            ).ask()
 
         if result is None:
             raise KeyboardInterrupt
@@ -138,8 +183,9 @@ def _parse_csv_values(raw_value: str) -> list[str]:
 def _prompt_api_key(provider: ProviderOption) -> str:
     while True:
         result = questionary.password(
-            f"Enter {provider.label} API key ({provider.api_key_env})",
+            f"{provider.label} API key ({provider.api_key_env})",
             style=_STYLE,
+            instruction=None,
         ).ask()
 
         if result is None:
@@ -151,18 +197,22 @@ def _prompt_api_key(provider: ProviderOption) -> str:
         _console.print("[red]API key is required.[/]")
 
 
-def _collect_validated_api_key(provider: ProviderOption, model: str) -> str:
+def _collect_validated_api_key(provider: ProviderOption, model: str, *, default_api_key: str = "") -> str:
     while True:
-        api_key = _prompt_api_key(provider)
+        api_key = _prompt_value(
+            f"{provider.label} API key ({provider.api_key_env})",
+            default=default_api_key,
+            secret=True,
+        )
         with _console.status(f"Validating {provider.label} API key...", spinner="dots"):
             result = validate_provider_credentials(provider=provider, api_key=api_key, model=model)
         if result.ok:
-            _console.print(f"[green]  {result.detail}[/]")
+            _console.print(f"[green]{result.detail}[/]")
             if result.sample_response:
-                _console.print(f"  Provider sample: [bold]{result.sample_response}[/]")
+                _console.print(f"[dim]Sample: {result.sample_response}[/]")
             return api_key
-        _console.print(f"[red]  Validation failed: {result.detail}[/]")
-        _console.print("[dim]  Paste the API key again to retry, or press Ctrl+C to cancel.[/]")
+        _console.print(f"[red]Validation failed: {result.detail}[/]")
+        _console.print("[dim]Press Enter to reuse the saved key, or paste a new one.[/]")
 
 
 def _select_provider() -> ProviderOption:
@@ -190,11 +240,11 @@ def _select_model(provider: ProviderOption) -> str:
 
 def _display_probe(result: ProbeResult) -> None:
     status = "[green]reachable[/]" if result.reachable else "[red]unreachable[/]"
-    _console.print(f"  - [bold]{result.target}[/]: {status} [dim]({result.detail})[/]")
+    _console.print(f"{result.target}: {status} [dim]({result.detail})[/]")
 
 
 def _select_target_for_advanced(local_probe: ProbeResult, remote_probe: ProbeResult) -> str | None:
-    _console.print("\n[bold]Reachability status[/]")
+    _console.print("\n[dim]Reachability check[/]")
     _display_probe(local_probe)
     _display_probe(remote_probe)
 
@@ -217,14 +267,8 @@ def _select_target_for_advanced(local_probe: ProbeResult, remote_probe: ProbeRes
 
 
 def _render_header() -> None:
-    _console.print(
-        Panel(
-            "[bold]OpenSRE onboarding[/]\n\n"
-            "Configure a local LLM provider, validate the API key, and sync the active settings into this repo.",
-            title="Welcome",
-            border_style="cyan",
-        )
-    )
+    _console.print("[bold]OpenSRE setup[/]")
+    _console.print("[dim]Configure your local model and optional integrations.[/]")
 
 
 def _render_saved_summary(
@@ -235,27 +279,30 @@ def _render_saved_summary(
     env_path: str,
     configured_integrations: list[str],
 ) -> None:
-    table = Table(show_header=False, box=None, pad_edge=False)
-    table.add_column(style="bold cyan", no_wrap=True)
-    table.add_column(style="white")
-    table.add_row("provider", provider_label)
-    table.add_row("model", model)
-    table.add_row("target", "local")
-    table.add_row("integrations", ", ".join(configured_integrations) or "none")
-    table.add_row("config", saved_path)
-    table.add_row("env sync", env_path)
-    _console.print(Panel(table, title="Saved configuration", border_style="green"))
+    integrations = ", ".join(configured_integrations) or "none"
+    _console.print("\n[green]Saved local configuration.[/]")
+    _console.print(f"[dim]{provider_label} / {model} / integrations: {integrations}[/]")
+    _console.print(f"[dim]Config: {saved_path}[/]")
+    _console.print(f"[dim]Env: {env_path}[/]")
 
 
 def _render_integration_result(service_label: str, result: IntegrationHealthResult) -> None:
     color = "green" if result.ok else "red"
-    _console.print(f"[{color}]  {service_label}: {result.detail}[/]")
+    _console.print(f"[{color}]{service_label}: {result.detail}[/]")
 
 
 def _configure_grafana() -> tuple[str, str]:
+    _, credentials = _integration_defaults("grafana")
     while True:
-        endpoint = _prompt_value("Grafana instance URL")
-        api_key = _prompt_value("Grafana service account token", secret=True)
+        endpoint = _prompt_value(
+            "Grafana instance URL",
+            default=_string_value(credentials.get("endpoint")),
+        )
+        api_key = _prompt_value(
+            "Grafana service account token",
+            default=_string_value(credentials.get("api_key")),
+            secret=True,
+        )
         with _console.status("Validating Grafana integration...", spinner="dots"):
             result = validate_grafana_integration(endpoint=endpoint, api_key=api_key)
         _render_integration_result("Grafana", result)
@@ -272,10 +319,22 @@ def _configure_grafana() -> tuple[str, str]:
 
 
 def _configure_datadog() -> tuple[str, str]:
+    _, credentials = _integration_defaults("datadog")
     while True:
-        api_key = _prompt_value("Datadog API key", secret=True)
-        app_key = _prompt_value("Datadog application key", secret=True)
-        site = _prompt_value("Datadog site", default="datadoghq.com")
+        api_key = _prompt_value(
+            "Datadog API key",
+            default=_string_value(credentials.get("api_key")),
+            secret=True,
+        )
+        app_key = _prompt_value(
+            "Datadog application key",
+            default=_string_value(credentials.get("app_key")),
+            secret=True,
+        )
+        site = _prompt_value(
+            "Datadog site",
+            default=_string_value(credentials.get("site"), "datadoghq.com"),
+        )
         with _console.status("Validating Datadog integration...", spinner="dots"):
             result = validate_datadog_integration(api_key=api_key, app_key=app_key, site=site)
         _render_integration_result("Datadog", result)
@@ -295,8 +354,13 @@ def _configure_datadog() -> tuple[str, str]:
 
 
 def _configure_slack() -> tuple[str, str]:
+    _, credentials = _integration_defaults("slack")
     while True:
-        webhook_url = _prompt_value("Slack webhook URL", secret=True)
+        webhook_url = _prompt_value(
+            "Slack webhook URL",
+            default=_string_value(credentials.get("webhook_url")),
+            secret=True,
+        )
         with _console.status("Validating Slack webhook...", spinner="dots"):
             result = validate_slack_webhook(webhook_url=webhook_url)
         _render_integration_result("Slack", result)
@@ -307,20 +371,32 @@ def _configure_slack() -> tuple[str, str]:
 
 
 def _configure_aws() -> tuple[str, str]:
+    existing, credentials = _integration_defaults("aws")
+    default_auth_mode = "role" if _string_value(existing.get("role_arn")) else "keys"
     auth_mode = _choose(
         "Choose the AWS authentication method:",
         [
             Choice(value="role", label="IAM role ARN"),
             Choice(value="keys", label="Access key + secret"),
         ],
-        default="role",
+        default=default_auth_mode,
     )
 
     while True:
-        region = _prompt_value("AWS region", default="us-east-1")
+        region = _prompt_value(
+            "AWS region",
+            default=_string_value(credentials.get("region"), "us-east-1"),
+        )
         if auth_mode == "role":
-            role_arn = _prompt_value("IAM role ARN")
-            external_id = _prompt_value("External ID", allow_empty=True)
+            role_arn = _prompt_value(
+                "IAM role ARN",
+                default=_string_value(existing.get("role_arn")),
+            )
+            external_id = _prompt_value(
+                "External ID",
+                default=_string_value(existing.get("external_id")),
+                allow_empty=True,
+            )
             with _console.status("Validating AWS role...", spinner="dots"):
                 result = validate_aws_integration(
                     region=region,
@@ -340,9 +416,22 @@ def _configure_aws() -> tuple[str, str]:
                 env_path = sync_env_values({"AWS_REGION": region})
                 return "AWS", str(env_path)
         else:
-            access_key_id = _prompt_value("AWS access key ID", secret=True)
-            secret_access_key = _prompt_value("AWS secret access key", secret=True)
-            session_token = _prompt_value("AWS session token", secret=True, allow_empty=True)
+            access_key_id = _prompt_value(
+                "AWS access key ID",
+                default=_string_value(credentials.get("access_key_id")),
+                secret=True,
+            )
+            secret_access_key = _prompt_value(
+                "AWS secret access key",
+                default=_string_value(credentials.get("secret_access_key")),
+                secret=True,
+            )
+            session_token = _prompt_value(
+                "AWS session token",
+                default=_string_value(credentials.get("session_token")),
+                secret=True,
+                allow_empty=True,
+            )
             with _console.status("Validating AWS credentials...", spinner="dots"):
                 result = validate_aws_integration(
                     region=region,
@@ -377,6 +466,8 @@ def _configure_aws() -> tuple[str, str]:
 
 
 def _configure_github_mcp() -> tuple[str, str]:
+    _, credentials = _integration_defaults("github")
+    default_mode = _string_value(credentials.get("mode"), DEFAULT_GITHUB_MCP_MODE)
     mode = _choose(
         "Choose the GitHub MCP transport:",
         [
@@ -384,7 +475,7 @@ def _configure_github_mcp() -> tuple[str, str]:
             Choice(value="streamable-http", label="Streamable HTTP"),
             Choice(value="stdio", label="stdio"),
         ],
-        default=DEFAULT_GITHUB_MCP_MODE,
+        default=default_mode,
     )
 
     while True:
@@ -392,23 +483,38 @@ def _configure_github_mcp() -> tuple[str, str]:
         command = ""
         args: list[str] = []
         if mode == "stdio":
-            command = _prompt_value("GitHub MCP command", default="github-mcp-server")
+            command = _prompt_value(
+                "GitHub MCP command",
+                default=_string_value(credentials.get("command"), "github-mcp-server"),
+            )
             args_raw = _prompt_value(
                 "GitHub MCP args",
-                default="stdio --toolsets repos,issues,pull_requests,actions",
+                default=_joined_values(
+                    credentials.get("args"),
+                    separator=" ",
+                    fallback="stdio --toolsets repos,issues,pull_requests,actions",
+                ),
             )
             args = [part for part in args_raw.split() if part]
         else:
-            url = _prompt_value("GitHub MCP URL", default=DEFAULT_GITHUB_MCP_URL)
+            url = _prompt_value(
+                "GitHub MCP URL",
+                default=_string_value(credentials.get("url"), DEFAULT_GITHUB_MCP_URL),
+            )
 
         toolsets = _parse_csv_values(
             _prompt_value(
                 "GitHub MCP toolsets (comma-separated)",
-                default="repos,issues,pull_requests,actions",
+                default=_joined_values(
+                    credentials.get("toolsets"),
+                    separator=",",
+                    fallback="repos,issues,pull_requests,actions",
+                ),
             )
         )
         auth_token = _prompt_value(
             "GitHub PAT / auth token (optional if the server already authenticates upstream)",
+            default=_string_value(credentials.get("auth_token")),
             secret=True,
             allow_empty=True,
         )
@@ -446,6 +552,7 @@ def _configure_github_mcp() -> tuple[str, str]:
 
 
 def _configure_sentry() -> tuple[str, str]:
+    _, credentials = _integration_defaults("sentry")
     guidance = get_sentry_auth_recommendations()
     _console.print(
         "[dim]Recommended: use a "
@@ -454,10 +561,24 @@ def _configure_sentry() -> tuple[str, str]:
     )
 
     while True:
-        base_url = _prompt_value("Sentry base URL", default=DEFAULT_SENTRY_URL)
-        organization_slug = _prompt_value("Sentry organization slug")
-        project_slug = _prompt_value("Sentry project slug (optional)", allow_empty=True)
-        auth_token = _prompt_value("Sentry auth token", secret=True)
+        base_url = _prompt_value(
+            "Sentry base URL",
+            default=_string_value(credentials.get("base_url"), DEFAULT_SENTRY_URL),
+        )
+        organization_slug = _prompt_value(
+            "Sentry organization slug",
+            default=_string_value(credentials.get("organization_slug")),
+        )
+        project_slug = _prompt_value(
+            "Sentry project slug (optional)",
+            default=_string_value(credentials.get("project_slug")),
+            allow_empty=True,
+        )
+        auth_token = _prompt_value(
+            "Sentry auth token",
+            default=_string_value(credentials.get("auth_token")),
+            secret=True,
+        )
 
         with _console.status("Validating Sentry integration...", spinner="dots"):
             result = validate_sentry_integration(
@@ -534,32 +655,33 @@ def _render_demo_response(demo_response: dict) -> None:
         content = str(first.get("content", "")).strip().splitlines()
         if content:
             summary.append(f"preview: {content[0][:140]}")
-    _console.print(Panel("\n".join(summary), title="Demo action response", border_style="magenta"))
+    _console.print("\n[bold]Demo[/]")
+    for line in summary:
+        _console.print(f"[dim]{line}[/]")
 
 
 def _render_next_steps() -> None:
-    _console.print(
-        Panel(
-            "1. Run `opensre onboard` any time to update local settings.\n"
-            "2. Run `make run -- --input path/to/alert.json` to exercise the CLI.",
-            title="Next steps",
-            border_style="blue",
-        )
-    )
+    _console.print("\n[bold]Next steps[/]")
+    _console.print("[dim]opensre onboard[/] to update settings later.")
+    _console.print("[dim]make run -- --input path/to/alert.json[/] to exercise the CLI.")
 
 
 def run_wizard(_argv: list[str] | None = None) -> int:
     """Run the interactive wizard."""
     _render_header()
+    defaults = _local_defaults()
+    default_provider_value = defaults["provider"]
+    if default_provider_value not in PROVIDER_BY_VALUE:
+        default_provider_value = SUPPORTED_PROVIDERS[0].value
 
-    _step("Step 1 of 5: Choose mode")
+    _step("Mode")
     wizard_mode = _choose(
         "Choose setup mode:",
         [
             Choice(value="quickstart", label="QuickStart (always local)"),
             Choice(value="advanced", label="Advanced"),
         ],
-        default="quickstart",
+        default=defaults["wizard_mode"],
     )
 
     store_path = get_store_path()
@@ -582,13 +704,29 @@ def run_wizard(_argv: list[str] | None = None) -> int:
         print("Only local configuration is supported today.", file=sys.stderr)
         return 1
 
-    _step("Step 2 of 5: Choose provider")
-    provider = _select_provider()
-    _step("Step 3 of 5: Choose default model")
-    model = _select_model(provider)
-    _step("Step 4 of 5: Validate credentials")
+    _step("Provider")
+    provider = PROVIDER_BY_VALUE[
+        _choose(
+            "Select your LLM provider:",
+            [
+                Choice(value=provider.value, label=provider.label, group=provider.group)
+                for provider in SUPPORTED_PROVIDERS
+            ],
+            default=default_provider_value,
+        )
+    ]
+    _step("Model")
+    default_model = defaults["model"]
+    if default_model not in {option.value for option in provider.models}:
+        default_model = provider.default_model
+    model = _choose(
+        f"Select the default {provider.label} model:",
+        [Choice(value=option.value, label=option.label) for option in provider.models],
+        default=default_model,
+    )
+    _step("API key")
     try:
-        api_key = _collect_validated_api_key(provider, model)
+        api_key = _collect_validated_api_key(provider, model, default_api_key=defaults["api_key"])
     except KeyboardInterrupt:
         _console.print("\n[yellow]Onboarding cancelled.[/]")
         return 1
@@ -608,7 +746,7 @@ def run_wizard(_argv: list[str] | None = None) -> int:
     )
     env_path = sync_provider_env(provider=provider, api_key=api_key, model=model)
 
-    _step("Step 5 of 5: Optional integrations")
+    _step("Optional integrations")
     try:
         configured_integrations, integration_env_path = _configure_selected_integrations()
     except KeyboardInterrupt:
