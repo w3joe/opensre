@@ -147,66 +147,13 @@ For a first real-system run, you do not need every integration:
 
 You can use `.env.example` as a reference for any other optional integrations you want to enable.
 
-If you prefer a local credential store instead of `.env`, you can also save integrations with:
-
-```bash
-python -m app.integrations setup grafana
-python -m app.integrations setup datadog
-python -m app.integrations setup aws
-```
-
-Or configure them directly in `.env`:
-
-```bash
-DD_API_KEY=...
-DD_APP_KEY=...
-DD_SITE=datadoghq.com
-
-AWS_REGION=us-east-1
-AWS_ROLE_ARN=...
-AWS_EXTERNAL_ID=...
-# or AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN
-
-GRAFANA_INSTANCE_URL=...
-GRAFANA_READ_TOKEN=...
-
-SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
-```
-
-### Verify your integrations before running RCA
-
-Use one preflight command to check the effective config from `~/.tracer/integrations.json` plus `.env`:
-
-```bash
-make verify-integrations
-```
-
-This full check exits non-zero while any listed service is still missing. If you are validating a smaller path such as `Datadog + Slack`, run the service-specific checks below instead.
-
-Once these checks pass, RCA runs will query your configured external systems and use that returned evidence in the report.
-
-Check a specific service:
-
-```bash
-make verify-integrations SERVICE=grafana
-make verify-integrations SERVICE=datadog
-make verify-integrations SERVICE=aws
-make verify-integrations SERVICE=tracer
-```
-
-If you also want to post a Slack test message through your incoming webhook:
-
-```bash
-make verify-integrations SERVICE=slack SLACK_TEST=1
-```
-
-If you want help configuring only the local LLM provider, you can also run:
+If you want help configuring the local LLM provider and optional local integrations, run the onboarding flow:
 
 ```bash
 opensre onboard
 ```
 
-The onboarding flow writes your provider choice and default model to `~/.opensre/opensre.json`, then syncs the active local settings into `.env`.
+The onboarding flow writes your provider choice and default model to `~/.opensre/opensre.json`, syncs the active local LLM settings into `.env`, and can also validate and save optional Grafana, Datadog, Slack, and AWS integration settings for local development.
 
 Because this repo is installed in editable mode via `make install`, `opensre onboard` targets your local checkout while you are coding. If you change `pyproject.toml` entrypoints later, rerun `make install` once to refresh the launcher.
 

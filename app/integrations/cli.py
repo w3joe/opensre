@@ -7,7 +7,7 @@ Usage:
     python -m app.integrations remove <service>
     python -m app.integrations verify [service] [--send-slack-test]
 
-Supported services: aws, grafana, datadog, opensearch, rds, tracer
+Supported services: aws, grafana, datadog, slack, opensearch, rds, tracer
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from app.integrations.verify import (
 
 _B = "\033[1m"
 _R = "\033[0m"
-_SECRET_KEYS = frozenset({"api_key", "app_key", "password", "secret_access_key", "session_token", "jwt_token"})
+_SECRET_KEYS = frozenset({"api_key", "app_key", "password", "secret_access_key", "session_token", "jwt_token", "webhook_url"})
 
 
 def _p(label: str, default: str = "", secret: bool = False) -> str:
@@ -96,6 +96,13 @@ def _setup_aws() -> None:
         upsert_integration("aws", {"credentials": {"access_key_id": access_key, "secret_access_key": secret_key, "session_token": _p("Session token (optional)"), "region": region}})
 
 
+def _setup_slack() -> None:
+    webhook_url = _p("Slack webhook URL", secret=True)
+    if not webhook_url:
+        _die("webhook_url is required.")
+    upsert_integration("slack", {"credentials": {"webhook_url": webhook_url}})
+
+
 def _setup_opensearch() -> None:
     endpoint = _p("Endpoint (e.g. https://my-cluster.us-east-1.es.amazonaws.com)")
     print("  1) Username + Password  2) API key")
@@ -131,6 +138,7 @@ _HANDLERS: dict[str, Any] = {
     "aws": _setup_aws,
     "datadog": _setup_datadog,
     "grafana": _setup_grafana,
+    "slack": _setup_slack,
     "opensearch": _setup_opensearch,
     "rds": _setup_rds,
     "tracer": _setup_tracer,
