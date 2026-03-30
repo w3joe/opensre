@@ -5,7 +5,7 @@ from io import StringIO
 
 import pytest
 
-from app.alert_templates import build_alert_template
+from app.cli.alert_templates import build_alert_template
 from app.cli.payload import load_file, load_payload, parse_payload_text
 
 

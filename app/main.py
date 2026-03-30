@@ -4,8 +4,8 @@ from dotenv import load_dotenv
 
 load_dotenv(override=False)
 
-from app.alert_templates import build_alert_template  # noqa: E402
 from app.cli import parse_args, write_json  # noqa: E402
+from app.cli.alert_templates import build_alert_template  # noqa: E402
 from app.cli.investigate import run_investigation_cli  # noqa: E402
 from app.cli.payload import load_payload  # noqa: E402
 

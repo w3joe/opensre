@@ -1,4 +1,4 @@
-"""Starter alert payload templates for local and standalone investigations."""
+"""Starter alert payload templates for CLI investigations."""
 
 from __future__ import annotations
 

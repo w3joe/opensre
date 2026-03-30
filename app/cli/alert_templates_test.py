@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.alert_templates import build_alert_template
+from app.cli.alert_templates import build_alert_template
 
 
 def test_build_alert_template_generic() -> None:
