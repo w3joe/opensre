@@ -74,16 +74,16 @@ make --version
 
 ### Option C: Manual Commands (No make required)
 
-If you can't install make, run these commands directly instead:
+If you can't install make, you can run these approximate equivalents directly instead (they are close to, but not always identical to, the Makefile targets; see comments for differences):
 
 ```bash
-# Instead of: make lint
+# Linting (rough equivalent of `make lint`; this also applies auto-fixes via --fix)
 python -m ruff check app/ tests/ --fix
 
-# Instead of: make typecheck
+# Type checking (equivalent of `make typecheck`)
 mypy app/
 
-# Instead of: make test-cov
+# Tests with coverage (rough equivalent of `make test-cov`; the Makefile version may add --cov-report/--ignore flags)
 pytest --cov=app tests/
 ```
 
