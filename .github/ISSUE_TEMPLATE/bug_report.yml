@@ -17,17 +17,14 @@ body:
     validations:
       required: true
   - type: textarea
-    id: expected
+    id: expected_actual
     attributes:
-      label: Expected behavior
-      description: What should happen? Be concrete; include expected output or state if relevant.
-    validations:
-      required: true
-  - type: textarea
-    id: actual
-    attributes:
-      label: Actual behavior
-      description: What actually happens? Include exact errors, exit codes, or unexpected output.
+      label: Expected vs actual behavior
+      description: What should happen, and what happens instead? Include exact errors, exit codes, or unexpected output where relevant.
+      placeholder: |
+        **Expected:** …
+
+        **Actual:** …
     validations:
       required: true
   - type: textarea
@@ -65,7 +62,7 @@ body:
     id: os
     attributes:
       label: Operating system
-      description: Pick the closest match; add details below if needed.
+      description: Pick the closest match.
       options:
         - macOS
         - Linux
@@ -73,39 +70,6 @@ body:
         - Other
     validations:
       required: true
-  - type: input
-    id: python_version
-    attributes:
-      label: Python version
-      description: Output of `python --version` (or runtime you use).
-      placeholder: e.g. Python 3.12.2
-    validations:
-      required: true
-  - type: input
-    id: agent_version
-    attributes:
-      label: Agent version
-      description: Version tag, package version, or `git rev-parse HEAD`.
-    validations:
-      required: true
-  - type: dropdown
-    id: install_method
-    attributes:
-      label: Install method
-      options:
-        - pip
-        - from source
-        - Docker
-        - Other
-    validations:
-      required: true
-  - type: textarea
-    id: environment_extra
-    attributes:
-      label: Environment details
-      description: OS version if not obvious, relevant `opensre` / app config, env vars (redact secrets), or anything needed to reproduce.
-    validations:
-      required: false
   - type: textarea
     id: logs
     attributes:
@@ -115,14 +79,6 @@ body:
         ```
         [paste error / logs]
         ```
-    validations:
-      required: false
-  - type: textarea
-    id: workarounds
-    attributes:
-      label: Workarounds
-      description: If you found a workaround, describe it. If none, say so.
-      placeholder: None found, or describe what you tried
     validations:
       required: false
   - type: textarea
